@@ -1,0 +1,1126 @@
+---
+title: "Final Project Part 2 - Project Report"
+author: "Linh Nguyen, Freddie Ortiz, Jingyi Wang"
+date: "11/15/2017 - 12/12/2017"
+output:
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE}
+library(data.table)
+library(ggthemes)
+library(Rmisc)
+library(dplyr)
+library(plyr)
+library(ggplot2)
+library(car)
+library(MASS)
+library(reshape)
+library(knitr)
+library(gridExtra)
+library(ggfortify)
+library(DT)
+library(ggmap)
+library(leaflet)
+library(caret)
+library(lubridate)
+```
+
+```{r, include=FALSE}
+
+NYC_Data <- read.csv("DOHMH_New_York_City_Restaurant_Inspection_Results_geocodio.csv")
+
+NYC_Data <- dplyr::rename(NYC_Data, Cuisine = CUISINE.DESCRIPTION)
+NYC_Data <- dplyr::rename(NYC_Data, ViolationDescription = VIOLATION.DESCRIPTION)
+NYC_Data <- dplyr::rename(NYC_Data, ViolationCode = VIOLATION.CODE)
+NYC_Data <- dplyr::rename(NYC_Data, InspectionDate = INSPECTION.DATE)
+```
+
+# Introduction
+
+New York City has regular annual inspections regarding the restaurants that inhabit the area. New York city encompasses five boroughs: Manhattan, Bronx, Brooklyn, Queens, and Staten Island. Inspectors from all the different boroughs check restaurants individually to oversee the compliance of city and state food safety regulations. If a restaurant violates any of these regulations, the inspector marks points. The ranges of these points are: 1-14, which constitutes to the letter grade of an A; 14-27, which constitutes to the letter grade of a B; 28 or higher, which constitutes to the letter grade of a C. Generally, the lower the points a restaurant receives, the more hygenic it is regarding New York's food safety regulations. The points are marked in regard to the violation codes, which are composed of letters and numbers. These codes are used by inspectors and the health department as a means to effectively explain the violation that has occured. New York city has gathered a large data of restaurant inspections that is available to the public. The inspection dates vary from the year of 2013 to the year of 2017. The large database can be found on www.nyc.gov and includes specific information regarding the restaurant's: zip code, building number, phone number, street number, etc. The restaurants were grouped by the style or method of cooking regarding a particular region. Some of these groupings were Mexican, Chinese, Latin, etc. As a variable of interest to our group, this column was referred to as cuisine in the original data.  
+
+For the purpose of our analysis, our focus will be mainly on the variables: cuisine, inspection date, borough, and score. The dataset was too large to focus on and analyze the many cuisines, so we narrowed our focal point down to the top five cuisines (American, Chinese, Mexican, Italian, and Japanese). We were then able to formulate our main question which is "where is the ideal location for running  a restaurant regarding the top five popular cuisines in New York city?" Once our main question was established, we were able to focus our interest on whether there is a correlation between cuisine and location, a borough has more restaurants of a specific cuisine, and there is a correlation between violation codes and cuisines. Finally we wanted to see if a cuisine has more of a specific violation code than others. 
+	
+# Ethical Consideration
+
+Our dataset is open data provided by New York City. Therefore, it gives us the right to publish our findings. If the dataset was private, then it would be unethical to publish without consent. However, if we were to decide to publish our findings, this would affect New York's city residents and restaurant owners. This publishing could result in the possibility of New York's residents becoming more predisposed in choosing where to eat. An example would be, if we find a lower score in American cuisines (a lower score is the result of less violation codes) and a higher score in Chinese (a higher score is the result of greater violation codes), New York residents would most likely choose to eat at the American restaurant than the Chinese restaurant. This would result in Chinese places' owners becoming more prone to criticism and decline in business. In addition, a higher score may suggest that the quality of the restaurant is worse. However, it should not be interpreted as being dirty, since the violations are not just about sanitation. To sum up, it is important to look at the analysis without any assumptions, especially when it comes to the quality of the restaurants themselves. 
+
+# Data Exploration 
+
+## Finding top 5 cuisines in NYC
+
+```{r, message = FALSE, warning = FALSE}
+
+# finding top 5 cuisines
+TopCuisines <- table(NYC_Data$Cuisine)
+# -> top 5 cuisines: American, Chinese, Italian, Japanese, Mexican
+
+Cuisines <- NYC_Data %>%
+  filter(!is.na(SCORE)) %>%
+  dplyr::select(BORO, Cuisine, ViolationCode, ViolationDescription,
+           InspectionDate, Latitude, Longitude, SCORE, ZIPCODE, State, County) %>%
+  filter(Cuisine == "American" | Cuisine == "Chinese"|
+           Cuisine == "Italian" | Cuisine == "Japanese" | Cuisine == "Mexican",
+         Latitude != 0,
+         Longitude != 0,
+         County == "Richmond County" | County == "New York County" | County == "Bronx County" |
+           County == "Kings County" | County == "Queens County")
+
+Cuisines$Cuisine <- as.numeric(
+  as.character(
+    factor(
+      Cuisines$Cuisine,
+      levels = c("American", "Chinese", "Italian", "Japanese", "Mexican"),
+      labels = c("1", "2", "3", "4", "5"))))
+```
+
+
+```{r, message = FALSE, warning = FALSE}
+Cuisines_frq <- Cuisines %>%
+  group_by(Cuisine) %>%
+  dplyr::select(Cuisine) %>%
+  filter(Cuisine == "1" | Cuisine == "2" | Cuisine == "3" | Cuisine == "4" | Cuisine == "5") %>%
+  summarise(Frequency = sum(Cuisine == "1", Cuisine == "2", Cuisine == "3", Cuisine == "4", Cuisine == "5"))
+
+Cuisines_frq$Cuisine <- factor(Cuisines_frq$Cuisine, levels = c(1, 2, 3, 4, 5),
+                             labels = c("American", "Chinese", "Italian", "Japanese", "Mexican"))
+
+Cuisines_frq <- Cuisines_frq[order(-Cuisines_frq$Frequency) , ]
+
+kable(Cuisines_frq, caption = "Top 5 Cuisines of New York City's Restaurants")
+
+```
+
+The top 5 cuisines in New York City are American (83,788), Chinese (39,389), Italian (16,504), Mexican (14,292), and Japanese (13,540). American cuisine restaurants account for the most, almost doubling the number of Chinese restaurants (which is the second most populat cuisine in New York City).
+
+## Maps
+
+```{r, message = FALSE, warning = FALSE}
+Cuisines_Dummy <- NYC_Data %>%
+  filter(!is.na(SCORE)) %>%
+  dplyr::select(BORO, Cuisine, ViolationCode, ViolationDescription,
+           InspectionDate, Latitude, Longitude, SCORE, ZIPCODE, State, County) %>%
+  filter(Cuisine == "American" | Cuisine == "Chinese"|
+           Cuisine == "Italian" | Cuisine == "Japanese" | Cuisine == "Mexican",
+         Latitude != 0,
+         Longitude != 0,
+         County == "Richmond County" | County == "New York County" | County == "Bronx County" |
+           County == "Kings County" | County == "Queens County")
+
+pal <- colorFactor(
+  palette = c('red', 'orange', 'sky blue', 'yellow', 'dark green'),
+  levels = Cuisines_Dummy$Cuisine,
+  domain = Cuisines_Dummy$Cuisine
+)
+
+NewYork <- leaflet("New York, USA") %>%
+  addTiles() %>%
+  addCircleMarkers(data = Cuisines_Dummy, radius = 3, color = ~pal(Cuisine), clusterOptions = markerClusterOptions()) %>%
+  addLegend(pal = pal, values = Cuisines_Dummy$Cuisine,
+            title = "Cuisine") %>%
+  setView(-73.98513, 40.7589, zoom = 13)
+
+NewYork
+
+```
+
+
+## Finding top 5 violation codes of NYC restaurants 
+
+```{r, message = FALSE, warning = FALSE}
+
+# Finding top 5 violation codes
+TopViolationCode <- table(Cuisines$ViolationCode)
+
+Violation_frq <- Cuisines %>%
+  group_by(ViolationCode, ViolationDescription) %>%
+  dplyr::select(ViolationCode, ViolationDescription) %>%
+  filter(ViolationCode == "10F" | ViolationCode == "08A" | ViolationCode == "06D" |
+         ViolationCode == "02G" | ViolationCode == "06C") %>%
+  summarise(Frequency = sum(ViolationCode == "10F", ViolationCode == "08A", ViolationCode == "06D",
+         ViolationCode == "02G", ViolationCode == "06C"))
+
+Violation_frq <- Violation_frq[order(-Violation_frq$Frequency) , ]
+kable(Violation_frq, caption = "Top 5 violation codes for the five most popular cuisines in NYC")
+
+```
+
+## Stacked bar plot for top 5 violation codes in each borough and each cuisine
+
+Before going into deeper analysis, we want to see which violation code is the most common in each borough. The tables below demonstrate the count of the top 5 violation codes and the percentage of them within each borough. Overall, it can be seen that 10F remains to be the most common violation code across the city. Another finding from the table is that the second most common violation code is 08A for every borough but Staten Island, whose second most common violation code is 06D. However, since the number of restaurants in Staten Island are fairly low compared to other boroughs, it can be safe to say that the two most common violation code across New York City is 10F and 08A. 
+
+```{r, message = FALSE, warning = FALSE}
+Manhattan_Viocode <- Cuisines %>%
+  group_by(BORO, ViolationCode) %>%
+  filter(BORO == "MANHATTAN",
+         ViolationCode == "10F" | ViolationCode == "08A" |
+                        ViolationCode == "06D" | ViolationCode == "02G" |
+                        ViolationCode == "06C") %>%
+  summarise(Count = sum(ViolationCode == "10F", ViolationCode == "08A",
+                        ViolationCode == "06D", ViolationCode == "02G",
+                        ViolationCode == "06C"),
+            Percentage = (Count / (10930 + 7729 + 6201 + 6081 + 5631))*100)
+Manhattan_Viocode <- Manhattan_Viocode[order(-Manhattan_Viocode$Count) , ]
+kable(Manhattan_Viocode, caption = "Manhattan")
+```
+
+
+```{r, message = FALSE, warning = FALSE}
+Bronx_Viocode <- Cuisines %>%
+  group_by(BORO, ViolationCode) %>%
+  filter(BORO == "BRONX",
+         ViolationCode == "10F" | ViolationCode == "08A" |
+                        ViolationCode == "06D" | ViolationCode == "02G" |
+                        ViolationCode == "06C") %>%
+  summarise(Count = sum(ViolationCode == "10F", ViolationCode == "08A",
+                        ViolationCode == "06D", ViolationCode == "02G",
+                        ViolationCode == "06C"),
+            Percentage = (Count / (1887 + 1515 + 873 + 840 + 787)) *100 )
+Bronx_Viocode <- Bronx_Viocode[order(-Bronx_Viocode$Count) , ]
+kable(Bronx_Viocode,caption = "Bronx")
+```
+
+```{r, message = FALSE, warning = FALSE}
+Brooklyn_Viocode <- Cuisines %>%
+  group_by(BORO, ViolationCode) %>%
+  filter(BORO == "BROOKLYN",
+         ViolationCode == "10F" | ViolationCode == "08A" |
+                        ViolationCode == "06D" | ViolationCode == "02G" |
+                        ViolationCode == "06C") %>%
+  summarise(Count = sum(ViolationCode == "10F", ViolationCode == "08A",
+                        ViolationCode == "06D", ViolationCode == "02G",
+                        ViolationCode == "06C"),
+            Percentage = (Count / (5990 + 4450 + 2959 + 2811 + 2784) *100))
+Brooklyn_Viocode <- Brooklyn_Viocode[order(-Brooklyn_Viocode$Count) , ]
+kable(Brooklyn_Viocode,caption = "Brooklyn")
+```
+
+```{r, message = FALSE, warning = FALSE}
+StatenIsland_Viocode <- Cuisines %>%
+  group_by(BORO, ViolationCode) %>%
+  filter(BORO == "STATEN ISLAND",
+         ViolationCode == "10F" | ViolationCode == "08A" |
+                        ViolationCode == "06D" | ViolationCode == "02G" |
+                        ViolationCode == "06C") %>%
+  summarise(Count = sum(ViolationCode == "10F", ViolationCode == "08A",
+                        ViolationCode == "06D", ViolationCode == "02G",
+                        ViolationCode == "06C"),
+            Percentage =(Count / (942 + 627 + 561 + 561 + 477))*100)
+StatenIsland_Viocode <- StatenIsland_Viocode[order(-StatenIsland_Viocode$Count) , ]
+kable(StatenIsland_Viocode,caption = "Staten Island")
+```
+
+```{r, message = FALSE, warning = FALSE}
+Queens_Viocode <- Cuisines %>%
+  group_by(BORO, ViolationCode) %>%
+  filter(BORO == "QUEENS",
+         ViolationCode == "10F" | ViolationCode == "08A" |
+                        ViolationCode == "06D" | ViolationCode == "02G" |
+                        ViolationCode == "06C") %>%
+  summarise(Count = sum(ViolationCode == "10F", ViolationCode == "08A",
+                        ViolationCode == "06D", ViolationCode == "02G",
+                        ViolationCode == "06C"),
+            Percentage = (Count / (4737 + 3244 + 2359 + 2213 + 2201)*100) )
+Queens_Viocode <- Queens_Viocode[order(-Queens_Viocode$Count) , ]
+kable(Queens_Viocode, caption = "Queens")
+```
+
+
+```{r, message = FALSE, warning = FALSE}
+Viocode_ggplot_boro <- rbind(Manhattan_Viocode, Bronx_Viocode, Brooklyn_Viocode, StatenIsland_Viocode, Queens_Viocode)
+Viocode_ggplot_boro$Percentage <- round(Viocode_ggplot_boro$Percentage, 3)
+
+ggplot(Viocode_ggplot_boro, aes( x = BORO, y = Percentage, fill = ViolationCode)) +
+   geom_bar(position = position_stack(), stat = "identity", width = .7) +
+  geom_text(aes(label = Percentage), position = position_stack(vjust = 0.5), size = 2.5) +
+  scale_fill_manual(name="Violation Code", values = c("salmon", "dark green", "sky blue", "purple", "coral")) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(title = " Percentage of Violation Codes by Boroughs", x = "Borough")
+
+```
+
+The bar plot shows the distribution of the top five violation codes in New York City restaurants inspections. All five boroughs show an even distribution of the violation codes, with 10F being the most common. However, the least common violation code (out of the five that are filtered) in each borough is different. In Bronx and Queens, it is 06D; in Brooklyn, it is 02G; in Manhattan and Staten Island, it is 06C. The difference is only by about 1 to 2 percent, which means the difference is not significant. 
+
+## Top 5 Violation codes by Cuisines
+
+Next, we want to see which violation code is the most common in each cuisine The tables below demonstrate the count of the top 5 violation codes and the percentage of them within each cuisine. Overall, it can be seen that 10F remains to be the most common violation code across the city. Another finding from the table is that the second most common violation code is 08A, which further confirms that the two most common violation code across New York City is 10F and 08A. 
+
+
+```{r, message = FALSE, warning = FALSE}
+American_Viocode <- Cuisines %>%
+  group_by(Cuisine, ViolationCode) %>%
+  filter(Cuisine == "1",
+         ViolationCode == "10F" | ViolationCode == "08A" |
+                        ViolationCode == "06D" | ViolationCode == "02G" |
+                        ViolationCode == "06C") %>%
+  summarise(Count = sum(ViolationCode == "10F", ViolationCode == "08A",
+                        ViolationCode == "06D", ViolationCode == "02G",
+                        ViolationCode == "06C"),
+            Percentage = (Count / (12821 + 8572 + 7442 + 6087 + 5571)) * 100 )
+American_Viocode <- American_Viocode[order(-American_Viocode$Count) , ]
+
+American_Viocode$Cuisine <- factor(American_Viocode$Cuisine, levels = c(1),
+                             labels = c("American"))
+kable(American_Viocode,caption = "American")
+```
+
+```{r, message = FALSE, warning = FALSE}
+Chinese_Viocode <- Cuisines %>%
+  group_by(Cuisine, ViolationCode) %>%
+  filter(Cuisine == "2",
+         ViolationCode == "10F" | ViolationCode == "08A" |
+                        ViolationCode == "06D" | ViolationCode == "02G" |
+                        ViolationCode == "06C") %>%
+  summarise(Count = sum(ViolationCode == "10F", ViolationCode == "08A",
+                        ViolationCode == "06D", ViolationCode == "02G",
+                        ViolationCode == "06C"),
+            Percentage = (Count / (5666 + 4343 + 3375 + 3094 + 2085)) * 100 )
+Chinese_Viocode <- Chinese_Viocode[order(-Chinese_Viocode$Count) , ]
+
+Chinese_Viocode$Cuisine <- factor(Chinese_Viocode$Cuisine, levels = c(2),
+                             labels = c("Chinese"))
+
+kable(Chinese_Viocode,caption = "Chinese")
+```
+
+```{r, message = FALSE, warning = FALSE}
+Italian_Viocode <- Cuisines %>%
+  group_by(Cuisine, ViolationCode) %>%
+  filter(Cuisine == "3",
+         ViolationCode == "10F" | ViolationCode == "08A" |
+                        ViolationCode == "06D" | ViolationCode == "02G" |
+                        ViolationCode == "06C") %>%
+  summarise(Count = sum(ViolationCode == "10F", ViolationCode == "08A",
+                        ViolationCode == "06D", ViolationCode == "02G",
+                        ViolationCode == "06C"),
+            Percentage = (Count / (2260 + 1600 + 1515 + 1315 + 1276)) * 100 )
+Italian_Viocode <- Italian_Viocode[order(-Italian_Viocode$Count) , ]
+
+Italian_Viocode$Cuisine <- factor(Italian_Viocode$Cuisine, levels = c(3),
+                             labels = c("Italian"))
+
+kable(Italian_Viocode,caption = "Italian")
+```
+
+```{r, message = FALSE, warning = FALSE}
+Japanese_Viocode <- Cuisines %>%
+  group_by(Cuisine, ViolationCode) %>%
+  filter(Cuisine == "4",
+         ViolationCode == "10F" | ViolationCode == "08A" |
+                        ViolationCode == "06D" | ViolationCode == "02G" |
+                        ViolationCode == "06C") %>%
+  summarise(Count = sum(ViolationCode == "10F", ViolationCode == "08A",
+                        ViolationCode == "06D", ViolationCode == "02G",
+                        ViolationCode == "06C"),
+            Percentage = (Count / (1860 + 1364 + 1056 + 958 + 812)) * 100 )
+Japanese_Viocode <- Japanese_Viocode[order(-Japanese_Viocode$Count) , ]
+
+Japanese_Viocode$Cuisine <- factor(Japanese_Viocode$Cuisine, levels = c(4),
+                             labels = c("Japanese"))
+
+kable(Japanese_Viocode,caption = "Japanese")
+```
+
+```{r, message = FALSE, warning = FALSE}
+Mexican_Viocode <- Cuisines %>%
+  group_by(Cuisine, ViolationCode) %>%
+  filter(Cuisine == "5",
+         ViolationCode == "10F" | ViolationCode == "08A" |
+                        ViolationCode == "06D" | ViolationCode == "02G" |
+                        ViolationCode == "06C") %>%
+  summarise(Count = sum(ViolationCode == "10F", ViolationCode == "08A",
+                        ViolationCode == "06D", ViolationCode == "02G",
+                        ViolationCode == "06C"),
+            Percentage = ( Count / (1879 + 1620 + 1052 + 982 + 785)) * 100 )
+Mexican_Viocode <- Mexican_Viocode[order(-Mexican_Viocode$Count) , ]
+
+Mexican_Viocode$Cuisine <- factor(Mexican_Viocode$Cuisine, levels = c(5),
+                             labels = c("Mexican"))
+
+kable(Mexican_Viocode,caption = "Mexican")
+```
+
+```{r, message = FALSE, warning = FALSE}
+Viocode_ggplot_cuisine <- rbind(American_Viocode, Chinese_Viocode, Italian_Viocode,
+                                Japanese_Viocode, Mexican_Viocode)
+Viocode_ggplot_cuisine$Percentage <- round(Viocode_ggplot_cuisine$Percentage, 3)
+
+ggplot(Viocode_ggplot_cuisine, aes( x = Cuisine, y = Percentage, fill = ViolationCode)) +
+   geom_bar(position = position_stack(), stat = "identity", width = .7) +
+  geom_text(aes(label = Percentage), position = position_stack(vjust = 0.5), size = 2.5) +
+  scale_fill_manual(name="Violation Code", values = c("salmon", "dark green", "sky blue", "purple", "coral")) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(title = " Percentage of Violation Codes by Cuisines", x = "Cuisine")
+
+```
+
+The bar plot shows the distribution of the top five cuisines in different boroughs in New York City. The majority of the cuisines in each borough is American. The second most popular cuisine in Bronx, Brooklyn, Queens, and Manhattan are Chinese, while in Staten Island it is Italian. Most Chinese restaurants are in Queens, American and Japanese restaurants in Manhattan, and Italian restaurants in Staten Island. 
+
+
+## Average scores of the boroughs
+
+```{r, message = FALSE, warning = FALSE}
+AvgScores_AllBoro <- NYC_Data %>% 
+  filter(!is.na(SCORE)) %>%
+  dplyr::select(BORO, SCORE) %>%
+  filter(BORO != "Missing") %>%
+  group_by(BORO) %>%
+  summarise(AverageScore = mean(SCORE))
+AvgScores_AllBoro <- AvgScores_AllBoro[order(AvgScores_AllBoro$AverageScore) , ]
+
+kable(AvgScores_AllBoro)
+```
+
+The table shows that the borough that has the lowest (or the best) score is Bronx, and the borough that has the highest (or worst) score is Staten Island. 
+
+## Numbers of restaurants by cuisines in NYC and average scores (within top 5 cuisines)
+
+```{r, message = FALSE, warning = FALSE}
+Cuisines_AllBoro <- Cuisines %>%
+  group_by(Cuisine) %>%
+  summarise(Count = sum(Cuisine == "1", Cuisine == "2",
+                        Cuisine == "3", Cuisine == "4",
+                        Cuisine == "5"),
+            AverageScore = mean(SCORE, na.rm = TRUE))
+
+Cuisines_AllBoro$Cuisine <- factor(Cuisines_AllBoro$Cuisine, levels = c(1, 2, 3, 4, 5),
+                             labels = c("American", "Chinese", "Italian", "Japanese", "Mexican"))
+Cuisines_AllBoro <- Cuisines_AllBoro[order(Cuisines_AllBoro$AverageScore) , ]
+kable(Cuisines_AllBoro,
+      caption = "Number of restaurants of top 5 cuisines in each borough and average scores")
+```
+
+The table shows the number of the restaurants by cuisines and their average scores. Since the lower the score, the better the quality of the restaurant (as stated by the New York City Inspection guides), American is the best and Chinese the worst. However, to conclude whether this is true, more tests should be conducted, which is what will be done in the later parts of the report. 
+
+## Average scores of restaurants by cuisines in different boroughs
+
+```{r, message = FALSE, warning = FALSE}
+American_AvgScore <- Cuisines %>%
+  dplyr::select(Cuisine,BORO, SCORE)%>%
+  group_by(BORO) %>%
+  filter(Cuisine == "1") %>%
+  summarise(AvgScore = mean(SCORE) )
+
+American_AvgScore <- American_AvgScore[order(American_AvgScore$AvgScore) , ]
+
+kable(American_AvgScore,caption = "American")
+```
+
+```{r, message = FALSE, warning = FALSE}
+Chinese_AvgScore <- Cuisines %>%
+  dplyr::select(Cuisine,BORO, SCORE)%>%
+  group_by(BORO) %>%
+  filter(Cuisine == "2") %>%
+  summarise(AvgScore = mean(SCORE) )
+
+Chinese_AvgScore <- Chinese_AvgScore[order(Chinese_AvgScore$AvgScore) , ]
+
+kable(Chinese_AvgScore,caption = "Chinese")
+```
+
+```{r, message = FALSE, warning = FALSE}
+Italian_AvgScore <- Cuisines %>%
+  dplyr::select(Cuisine,BORO, SCORE)%>%
+  group_by(BORO) %>%
+  filter(Cuisine == "3") %>%
+  summarise(AvgScore = mean(SCORE) )
+
+Italian_AvgScore <- Italian_AvgScore[order(Italian_AvgScore$AvgScore) , ]
+
+kable(Italian_AvgScore,caption = "Italian")
+```
+
+```{r, message = FALSE, warning = FALSE}
+Japanese_AvgScore <- Cuisines %>%
+  dplyr::select(Cuisine,BORO, SCORE)%>%
+  group_by(BORO) %>%
+  filter(Cuisine == "4") %>%
+  summarise(AvgScore = mean(SCORE) )
+
+Japanese_AvgScore <- Japanese_AvgScore[order(Japanese_AvgScore$AvgScore) , ]
+
+kable(Japanese_AvgScore,caption = "Japanese")
+```
+
+```{r, message = FALSE, warning = FALSE}
+Mexican_AvgScore <- Cuisines %>%
+  dplyr::select(Cuisine,BORO, SCORE)%>%
+  group_by(BORO) %>%
+  filter(Cuisine == "5") %>%
+  summarise(AvgScore = mean(SCORE) )
+
+Mexican_AvgScore <- Mexican_AvgScore[order(Mexican_AvgScore$AvgScore) , ]
+
+kable(Mexican_AvgScore,caption = "Mexican")
+
+```
+
+Comparing the five tables above, we can assume that Queens have higher quality American, Italian, and Mexican food because the average scores for those cuisines are the lowest (which indicate the best). Also, the higher quality Chinese and Japanese restaurants can be found in Bronx. Some statistical records catching our attention are that the average score of Chinese restaurant in Manhattan is 23, which is much higher than any other cuisine in any different boroughs, and the lowest average score is 15, which is the average score of Japanese restaurants in Bronx.
+
+
+# Manhattan Data
+
+```{r, message = FALSE, warning = FALSE}
+Manhattan_Cuisines <- Cuisines %>%
+  group_by(BORO, Cuisine) %>%
+  filter(BORO == "MANHATTAN") %>%
+  summarise(Count = sum(Cuisine == "1", Cuisine == "2",
+                        Cuisine == "3", Cuisine == "4",
+                        Cuisine == "5"),
+            AverageScore = mean(SCORE, na.rm = TRUE),
+            Percentage = ( Count / (43622+10526+9599+7917+4874) ) * 100 ) 
+Manhattan_Cuisines$Cuisine <- factor(Manhattan_Cuisines$Cuisine, levels = c(1, 2, 3, 4, 5),
+                             labels = c("American", "Chinese", "Italian", "Japanese", "Mexican"))
+Manhattan_Cuisines <- Manhattan_Cuisines[order(-Manhattan_Cuisines$Count) , ]
+kable(Manhattan_Cuisines, caption = "Manhattan")
+```
+
+The table shows that the most popular cuisine in Manhattan is American (accounting for approximately 57% of all the restaurants in the borough). The other cuisines follow with Mexican being the least popular in Manhattan (accounting for about 6.37%). American cuisine also has the lowest score (18.3), which means that it is the best compared to the other cuisines. The worst score (or the highest one) belongs to Chinese cuisine, with a score of 13.75.
+
+## Manhattan residuals 
+
+```{r, message = FALSE, warning = FALSE}
+#filtering Manhattan data residuals
+Manhattan_Residuals <- Cuisines %>%
+  filter(BORO == "MANHATTAN")
+
+#linear model
+Manhattan_Cuisines_mod <- lm(data = Manhattan_Residuals, SCORE ~ Cuisine)
+summary(Manhattan_Cuisines_mod)
+```
+
+The linear model demonstrates a weak positive correlation between Cuisine and Score. The slope shows that there is a positive correlation; however, both the multiple and adjusted R-squared values are very low, which contradicts the correlation. The p-values are all below 0.05, so it can be tentatively concluded that the positive correlation between cuisine and score is not reliable. Thus, there is almost no relationship between cuisine and score. 
+
+```{r, message=FALSE, warning = FALSE}
+#making Manhattan data's residuals table
+Manhattan_Residuals <- Manhattan_Residuals %>%
+  dplyr::select(Cuisine, SCORE) %>%
+  mutate(residual = resid(Manhattan_Cuisines_mod))
+
+Manhattan_Residuals$Cuisine <- factor(Manhattan_Residuals$Cuisine, levels = c(1, 2, 3, 4, 5),
+                             labels = c("American", "Chinese", "Italian", "Japanese", "Mexican"))
+
+#histogram
+ggplot(Manhattan_Residuals, aes(residual)) + 
+  geom_histogram() +
+  theme_tufte() +
+  labs(x="Residuals", title="Residuals of Manhattan Restaurants Score")
+```
+
+The histogram of the residuals shows that there are outliers in the scores given to restaurants in Manhattan. It is largely skewed to the right, which indicates that the true mean (or the real mean) is lower than the predicted mean. 
+
+```{r, message = FALSE, warning = FALSE}
+#boxplot
+ggplot(Manhattan_Residuals,aes(x=factor(Cuisine),y=SCORE, colour = Cuisine))+
+  geom_boxplot(notch = TRUE) +
+  labs(x="Cuisines", y = "Score", title = "Scores of restaurants in Manhattan by Cuisines") 
+```
+
+The boxplots for scores of different cuisines in Manhattan show that scores of American cuisine restaurants have a lot of outliers compared to those of Chinese cuisine restaurants. This may imply that the average score for American cuisine, though being the lowest, is not reliable. It also applies to Chinese cuisine restaurants' score since it has the worst score (or the highest); their outliers are less than those of American, so this may indicate that Chinese restaurants' scores are not that high and thus not the worst like what the table has previously shown. 
+
+## t-tests on top 5 cuisines in Manhattan
+
+```{r, message = FALSE, warning = FALSE}
+Manhattan_American <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "MANHATTAN", Cuisine == "1") %>%
+  mutate(AverageScore = sum(SCORE)/43622)
+
+t.test(Manhattan_American$SCORE, H0 = mu,conf.level=0.95)
+
+Manhattan_Chinese <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "MANHATTAN", Cuisine == "2") %>%
+  mutate(AverageScore = sum(SCORE)/10526)
+
+t.test(Manhattan_Chinese$SCORE,H0 = mu,conf.level=0.95)
+
+Manhattan_Italian <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "MANHATTAN", Cuisine == "3") %>%
+  mutate(AverageScore = sum(SCORE)/9599)
+
+t.test(Manhattan_Italian$SCORE,H0 = mu,conf.level=0.95)
+
+Manhattan_Japanese <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "MANHATTAN", Cuisine == "4") %>%
+  mutate(AverageScore = sum(SCORE)/7917)
+
+t.test(Manhattan_Japanese$SCORE,H0 = mu,conf.level=0.95)
+
+Manhattan_Mexican <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "MANHATTAN", Cuisine == "5") %>%
+  mutate(AverageScore = sum(SCORE)/4874)
+
+t.test(Manhattan_Mexican$SCORE,H0 = mu,conf.level=0.95)
+
+```
+
+The t-tests show that the null hypotheses of the relationship between score and its mean value are no different are all rejected for all cuisines with the p-values lower than 2.2e-16 (which satisfies the benchmark of 0.05). The 95 percent confidence interval for the scores of Chinese cuisine and American cuisine have a wider range than the others, which indicate a more accurate result. However, compared to the range of the scores we interpreted before, the 95 precent confidence intervals for all cuisine are very narrow. This goes well with what has been observed in the boxplots. 
+
+# Queens Data
+
+```{r, message = FALSE, warning = FALSE}
+Queens_Cuisines <- Cuisines %>%
+  group_by(BORO, Cuisine) %>%
+  filter(BORO == "QUEENS") %>%
+  summarise(Count = sum(Cuisine == "1", Cuisine == "2",
+                        Cuisine == "3", Cuisine == "4",
+                        Cuisine == "5"),
+            AverageScore = mean(SCORE, na.rm = TRUE),
+            Percentage = ( Count / (13638 + 11079 + 2962 + 2046 + 1977)) * 100 )
+
+Queens_Cuisines$Cuisine <- factor(Queens_Cuisines$Cuisine, levels = c(1, 2, 3, 4, 5),
+                             labels = c("American", "Chinese", "Italian", "Japanese", "Mexican"))
+Queens_Cuisines <- Queens_Cuisines[order(-Queens_Cuisines$Count) , ]
+kable(Queens_Cuisines, caption = "Queens")
+```
+
+The table shows that the most popular cuisine in Queens is American (accounting for approximately 43% of all the restaurants in the borough). The other cuisines follow with Japanese being the least popular in Queens (accounting for about 6.24%). American cuisine also has the lowest score (17.1), which means that it is the best compared to the other cuisines. The worst score (or the highest one) belongs to Chinese cuisine with a score of 20.06.
+
+## Queens residuals
+
+```{r, message=FALSE, warning=FALSE}
+Queens_Residuals <- Cuisines %>%
+  filter(BORO == "QUEENS")
+
+Queens_Cuisines_mod <- lm(data = Queens_Residuals, SCORE ~ Cuisine)
+summary(Queens_Cuisines_mod)
+```
+
+The linear model demonstrates a weak positive correlation between Cuisine and Score. The slope shows that there is a positive correlation; however, both the multiple and adjusted R-squared values are very low, which indicates that the correlation between two variables are very weak. The p-values are all very much below 0.05, so it can be tentatively concluded that the positive correlation between cuisine and score is not reliable. Thus, there is almost no relationship between cuisine and score. 
+
+
+```{r, message = FALSE, warning = FALSE}
+Queens_Residuals <- Queens_Residuals %>%
+  dplyr::select(Cuisine, SCORE) %>%
+  mutate(residual = resid(Queens_Cuisines_mod))
+
+Queens_Residuals$Cuisine <- factor(Queens_Residuals$Cuisine, levels = c(1, 2, 3, 4, 5),
+                             labels = c("American", "Chinese", "Italian", "Japanese", "Mexican"))
+ggplot(Queens_Residuals, aes(residual)) + 
+  geom_histogram() +
+  theme_tufte() +
+  labs(x="Residuals", title = "Residuals of Queens restaurants score")
+```
+
+The histogram of the residuals shows that there are outliers in the scores given to restaurants in Queens. Much like Manhattan???s, it is skewed to the right, which indicates that the true mean (or the real mean) is lower than the predicted mean. This affects the validity of the average score of each borough.
+
+```{r, message = FALSE, warning = FALSE}
+ggplot(Queens_Residuals,aes(x=factor(Cuisine),y=SCORE, colour = Cuisine)) +
+  geom_boxplot(notch = TRUE) +
+  labs(x="Cuisines", y ="Score", "Residuals", title = "Scores of restaurants in Queens by Cuisines")
+```
+
+The boxplots for scores of different cuisines in Queens show that scores of both American and Chinese cuisine restaurants have a lot of outliers compared to those of others. This may imply that there are a lot of good restaurants (according to the inspection scores) in these two cuisines. Though the average scores may say otherwise, the outliers have clearly indicated that the there are quite a big number of Chinese restaurants that are of good quality. Nevertheless, the fact that American restaurants' score has that many outliers yet still has the lowest score shows that in general, they still have the best restaurants in terms of inspection scores. For the other cuisines, there are fewer outliers.
+
+## t-tests on top 5 cuisines in Queens
+
+```{r, message=FALSE, warning= FALSE}
+Queens_American <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "QUEENS", Cuisine == "1") %>%
+  mutate(AverageScore = sum(SCORE)/13638)
+
+t.test(Queens_American$SCORE,H0 = mu,conf.level=0.95)
+
+Queens_Chinese <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "QUEENS", Cuisine == "2") %>%
+  mutate(AverageScore = sum(SCORE)/11079)
+
+t.test(Queens_Chinese$SCORE,H0 = mu,conf.level=0.95)
+
+Queens_Italian <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "QUEENS", Cuisine == "3") %>%
+  mutate(AverageScore = sum(SCORE)/2046)
+
+t.test(Queens_Italian$SCORE,H0 = mu,conf.level=0.95)
+
+Queens_Japanese <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "QUEENS", Cuisine == "4") %>%
+  mutate(AverageScore = sum(SCORE)/1977)
+
+t.test(Queens_Japanese$SCORE,H0 = mu,conf.level=0.95)
+
+Queens_Mexican <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "QUEENS", Cuisine == "5") %>%
+  mutate(AverageScore = sum(SCORE)/2962)
+
+t.test(Queens_Mexican$SCORE,H0 = mu,conf.level=0.95)
+
+```
+
+The t-tests show that the null hypotheses of the relation between score and its mean value are no different are all rejected with the p-values lower than 2.2e-16 (which satisfies the benchmark of 0.05) and large t-values (ranging from approximately 68 to 173). The scores are significantly different from 0, which is right considering the hypothesis.
+
+# Brooklyn Data
+
+```{r, message = FALSE, warning = FALSE}
+Brooklyn_Cuisines <- Cuisines %>%
+  group_by(BORO, Cuisine) %>%
+  filter(BORO == "BROOKLYN") %>%
+  summarise(Count = sum(Cuisine == "1", Cuisine == "2",
+                        Cuisine == "3", Cuisine == "4",
+                        Cuisine == "5"),
+            AverageScore = mean(SCORE, na.rm = TRUE),
+            Percentage = ( Count / (17973 + 12494 + 4180 + 2828 + 2731) ) * 100 )
+
+Brooklyn_Cuisines$Cuisine <- factor(Brooklyn_Cuisines$Cuisine, levels = c(1, 2, 3, 4, 5),
+                             labels = c("American", "Chinese", "Italian", "Japanese", "Mexican"))
+Brooklyn_Cuisines <- Brooklyn_Cuisines[order(Brooklyn_Cuisines$AverageScore) , ]
+kable(Brooklyn_Cuisines, caption = "Brooklyn")
+```
+
+The table shows that the most popular cuisine in Brooklyn is American (accounting for approximately 45% of all the restaurants in the borough). The other cuisines follow with Italian being the least popular (accounting for about 6.24%). American cuisine also has the lowest score (18.19), which means that it is the best compared to the other cuisines. The worst score (or the highest one) belongs to Mexican cuisine with a score of 20.67.
+
+## Brooklyn residuals
+
+```{r, message=FALSE, warning=FALSE}
+Brooklyn_Residuals <- Cuisines %>%
+  filter(BORO == "BROOKLYN")
+
+Brooklyn_Cuisines_mod <- lm(data = Brooklyn_Residuals, SCORE ~ Cuisine)
+summary(Brooklyn_Cuisines_mod)
+
+```
+
+The linear model demonstrates a weak positive correlation between Cuisine and Score. The slope shows that there is a positive correlation; however, both the multiple and adjusted R-squared values are very low, which indicates that the correlation between two variables are very weak. The p-values are all 0.05, so it can be tentatively concluded that the positive correlation between cuisine and score is not reliable. Thus, there is almost no relationship between cuisine and score. 
+
+
+```{r, message = FALSE, earning = FALSE}
+Brooklyn_Residuals <- Brooklyn_Residuals %>%
+  dplyr::select(Cuisine, SCORE) %>%
+  mutate(residual = resid(Brooklyn_Cuisines_mod))
+
+Brooklyn_Residuals$Cuisine <- factor(Brooklyn_Residuals$Cuisine, levels = c(1, 2, 3, 4, 5),
+                             labels = c("American", "Chinese", "Italian", "Japanese", "Mexican"))
+
+ggplot(Brooklyn_Residuals, aes(residual)) + 
+  geom_histogram() +
+  theme_tufte() +
+  labs(x="Residuals", title = "Residuals of Brooklyn restaurants score")
+```
+
+The histogram of the residuals shows that there are outliers in the scores given to restaurants in Brooklyn. Much like other boroughs???, it is skewed to the right, which indicates that the true mean (or the real mean) is lower than the predicted mean. This further implies that the predicted means are very different from the true means.
+
+```{r, message = FALSE, warning = FALSE}
+ggplot(Brooklyn_Residuals,aes(x=factor(Cuisine),y=SCORE, colour = Cuisine)) +
+  geom_boxplot(notch=TRUE) +
+  labs(x="Cuisines", y ="Score", title = "Scores of restaurants in Brooklyn by Cuisines")
+```
+
+Similar to the previous boxplots, it can be seen that there are a lot of outliers for American and Chinese restaurants' scores. This indicates that though the score for Chinese is the highest, the numerous outliers imply that not all of the restaurants receive a bad score. Instead, there are some good restaurants, too. It also applies to American, but considering that its score is the lowest (which means that the cuisine has some of the best restaurants), there must be some very high-quality restaurants of this cuisine in Brooklyn. In addition, Japanese and Mexican cuisine restaurants also have a number of outliers that might affect their scores the same way with Chinese restaurants. 
+
+## t-tests on top 5 cuisines in Brooklyn
+
+```{r, message=FALSE, warning = FALSE}
+Brooklyn_American <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "BROOKLYN", Cuisine == "1") %>%
+  mutate(AverageScore = sum(SCORE)/17973)
+
+t.test(Brooklyn_American$SCORE,H0 = mu,conf.level=0.95)
+
+Brooklyn_Chinese <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "BROOKLYN", Cuisine == "2") %>%
+  mutate(AverageScore = sum(SCORE)/12494)
+
+t.test(Brooklyn_Chinese$SCORE,H0 = mu,conf.level=0.95)
+
+Brooklyn_Italian <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "BROOKLYN", Cuisine == "3") %>%
+  mutate(AverageScore = sum(SCORE)/2731)
+
+t.test(Brooklyn_Italian$SCORE,H0 = mu,conf.level=0.95)
+
+Brooklyn_Japanese <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "BROOKLYN", Cuisine == "4") %>%
+  mutate(AverageScore = sum(SCORE)/2828)
+
+t.test(Brooklyn_Japanese$SCORE,H0 = mu,conf.level=0.95)
+
+Brooklyn_Mexican <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "BROOKLYN", Cuisine == "5") %>%
+  mutate(AverageScore = sum(SCORE)/4180)
+
+t.test(Brooklyn_Mexican$SCORE,H0 = mu,conf.level=0.95)
+
+```
+
+The t-tests show that the null hypotheses of the relation between score and its mean value are no different are all rejected with the p-values lower than 2.2e-16 (which satisfies the benchmark of 0.05) and large t-values (ranging from approximately 74.3 to 196). The scores are significantly different from 0, which is right considering the hypothesis. The range of the 95 percent confidence interval is small, which indicates a lower level of accuracy.
+
+# Bronx Data
+
+```{r, message = FALSE, warning = FALSE}
+Bronx_Cuisines <- Cuisines %>%
+  group_by(BORO, Cuisine) %>%
+  filter(BORO == "BRONX") %>%
+  summarise(Count = sum(Cuisine == "1", Cuisine == "2",
+                        Cuisine == "3", Cuisine == "4",
+                        Cuisine == "5"),
+            AverageScore = mean(SCORE, na.rm = TRUE),
+            Percentage = ( Count / (5430 + 4116 + 1727 + 883 + 266)) * 100 )
+
+Bronx_Cuisines$Cuisine <- factor(Bronx_Cuisines$Cuisine, levels = c(1, 2, 3, 4, 5),
+                             labels = c("American", "Chinese", "Italian", "Japanese", "Mexican"))
+Bronx_Cuisines <- Bronx_Cuisines[order(Bronx_Cuisines$AverageScore) , ]
+kable(Bronx_Cuisines, caption = "Bronx")
+```
+
+The table shows that the most popular cuisine in Bronx is American (accounting for approximately 44% of all the restaurants in the borough). The other cuisines follow with Japanese being the least popular (accounting for about 2.14%). Japanese restaurants also have the lowest score (15.25), which means that it is the best compared to the other cuisines. The worst score (or the highest one) belongs to Mexican cuisine with a score of 20.
+
+## Bronx residuals
+
+```{r, message=FALSE, warning=FALSE}
+Bronx_Residuals <- Cuisines %>%
+  filter(BORO == "BRONX")
+
+Bronx_Cuisines_mod <- lm(data = Bronx_Residuals, SCORE ~ Cuisine)
+summary(Bronx_Cuisines_mod)
+```
+
+The linear model demonstrates a weak positive correlation between Cuisine and Score. The slope shows that there is a positive correlation; however, both the multiple and adjusted R-squared values are very low, which indicates the correlation between two variables are very weak. One thing to note is that out of every borough, Bronx has the highest R-squared value, which means that it has a slightly stronger correlation
+The p-values are all very much below 0.05, so it can be tentatively concluded that the positive correlation between cuisine and score is not reliable. Thus, though the correlation is a little stronger, there is almost no relationship between cuisine and score.
+
+```{r, message = FALSE, warning = FALSE}
+Bronx_Residuals <- Bronx_Residuals %>%
+  dplyr::select(Cuisine, SCORE) %>%
+  mutate(residual = resid(Bronx_Cuisines_mod))
+
+Bronx_Residuals$Cuisine <- factor(Bronx_Residuals$Cuisine, levels = c(1, 2, 3, 4, 5),
+                             labels = c("American", "Chinese", "Italian", "Japanese", "Mexican"))
+
+ggplot(Bronx_Residuals, aes(residual)) + 
+  geom_histogram() +
+  theme_tufte() +
+  labs(x="Residuals", title = "Residuals of Bronx restaurants score")
+```
+
+The histogram of the residuals shows that there are outliers in the scores given to restaurants in Bronx. Much like other boroughs???, it is skewed to the right, which indicates that the true mean (or the real mean) is lower than the predicted mean. This further supports the previous assumption that the true mean is different from what is shown by the average scores calculated in the tables.
+
+```{r, message = FALSE, warning = FALSE}
+ggplot(Bronx_Residuals,aes(x=factor(Cuisine),y=SCORE, colour = Cuisine))+
+  geom_boxplot(notch=TRUE) +
+  labs(x="Cuisines", y ="Score", title = "Scores of restaurants in Bronx by Cuisines")
+```
+
+The boxplots for scores of different cuisines in Bronx show that for every cuisine except Japanese there are some outliers. The number of outliers is significantly less than that of other boroughs. This is probably because there are less restaurants in Bronx than in other boroughs. It can be seen from the boxplots that, similar to other boroughs, the outliers for American and Chinese restaurants are the largest, which indicates almost the same thing as the previous boxplots. One thing to note in these barplots is that there are no outliers for Japanese restaurants' scores. This implies that the scores for Japanese restaurants are very consistently low, which means that those restaurants are of the higher quality. 
+
+## t-tests on top 5 cuisines in Bronx
+
+```{r, message=FALSE, warning = FALSE}
+Bronx_American <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "BRONX", Cuisine == "1") %>%
+  mutate(AverageScore = sum(SCORE)/5430)
+
+t.test(Bronx_American$SCORE,H0 = mu,conf.level=0.95)
+
+Bronx_Chinese <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "BRONX", Cuisine == "2") %>%
+  mutate(AverageScore = sum(SCORE)/4116)
+
+t.test(Bronx_Chinese$SCORE,H0 = mu,conf.level=0.95)
+
+Bronx_Italian <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "BRONX", Cuisine == "3") %>%
+  mutate(AverageScore = sum(SCORE)/883)
+
+t.test(Bronx_Italian$SCORE,H0 = mu,conf.level=0.95)
+
+Bronx_Japanese <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "BRONX", Cuisine == "4") %>%
+  mutate(AverageScore = sum(SCORE)/266)
+
+t.test(Bronx_Japanese$SCORE,H0 = mu,conf.level=0.95)
+
+Bronx_Mexican <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "BRONX", Cuisine == "5") %>%
+  mutate(AverageScore = sum(SCORE)/1727)
+
+t.test(Bronx_Mexican$SCORE,H0 = mu,conf.level=0.95)
+```
+
+The t-tests show that the null hypotheses of the relation between score and its mean value are no different are all rejected with the p-values lower than 2.2e-16 (which satisfies the benchmark of 0.05) and large t-values (ranging from approximately 33 to 106). The scores are significantly different from 0, which is right considering the hypothesis. The range of the 95 percent confidence interval for Italian and Japanese restaurants' scores are slightly bigger than the others, which indicate a larger range of scores for these two cuisines. 
+
+# Staten Island Data
+
+```{r, message = FALSE, warning = FALSE}
+StatenIsland_Cuisines <- Cuisines %>%
+  group_by(BORO, Cuisine) %>%
+  filter(BORO == "STATEN ISLAND") %>%
+  summarise(Count = sum(Cuisine == "1", Cuisine == "2",
+                        Cuisine == "3", Cuisine == "4",
+                        Cuisine == "5"),
+            AverageScore = mean(SCORE, na.rm = TRUE),
+            Percentage = ( Count / (3125 + 1245 + 1174 + 552 + 549)) * 100 )
+StatenIsland_Cuisines$Cuisine <- factor(StatenIsland_Cuisines$Cuisine, levels = c(1, 2, 3, 4, 5),
+                             labels = c("American", "Chinese", "Italian", "Japanese", "Mexican"))
+StatenIsland_Cuisines <- StatenIsland_Cuisines[order(StatenIsland_Cuisines$AverageScore) , ]
+kable(StatenIsland_Cuisines, caption = "Staten Island")
+
+```
+
+The table shows that the most popular cuisine in Staten Island is American (accounting for approximately 47% of all the restaurants in the borough). The other cuisines follow with Mexican being the least popular (accounting for about 8.26%). Chinese restaurants have the lowest score (18.49), which means that it is the best compared to the other cuisines. The worst score (or the highest one) belongs to Japanese cuisine with a score of 20.41.
+
+## Staten Island residuals
+
+```{r, message=FALSE, warning=FALSE}
+StatenIsland_Residuals <- Cuisines %>%
+  filter(BORO == "STATEN ISLAND")
+
+StatenIsland_Cuisines_mod <- lm(data = StatenIsland_Residuals, SCORE ~ Cuisine)
+summary(StatenIsland_Cuisines_mod)
+```
+
+The linear model demonstrates a weak positive correlation between Cuisine and Score. The slope shows that there is a positive correlation; however, both the multiple and adjusted R-squared values are very low, which indicates that the correlation between two variables are very weak. One thing to note is that the linear model for Staten Island also has the lowest R-squared values. 
+Most of the p-values are all very much below 0.05, so it can be tentatively concluded that the positive correlation between cuisine and score is not reliable. Thus, there is almost no relationship between cuisine and score. 
+
+```{r, message = FALSE, warning = FALSE}
+StatenIsland_Residuals <- StatenIsland_Residuals %>%
+  dplyr::select(Cuisine, SCORE) %>%
+  mutate(residual = resid(StatenIsland_Cuisines_mod))
+
+StatenIsland_Residuals$Cuisine <- factor(StatenIsland_Residuals$Cuisine, levels = c(1, 2, 3, 4, 5),
+                             labels = c("American", "Chinese", "Italian", "Japanese", "Mexican"))
+
+ggplot(StatenIsland_Residuals, aes(residual)) + 
+  geom_histogram() +
+  theme_tufte() +
+  labs(x="Residuals", title = "Residuals of Staten Island restaurants score")
+```
+
+The histogram of the residuals shows that there are outliers in the scores given to restaurants in Staten Island. Much like other boroughs???, it is skewed to the right, which indicates that the true mean (or the real mean) is lower than the predicted mean. However, compared to other boroughs???, Staten Island???s histogram is slighly less skewed, suggesting a better reliability in its true average score.
+
+```{r, message = FALSE, warning = FALSE}
+ggplot(StatenIsland_Residuals,aes(x=Cuisine,y=SCORE, colour = Cuisine)) +
+  geom_boxplot(notch=TRUE) +
+  labs(x="Cuisines", y ="Score", title = "Scores of restaurants in Staten Island by Cuisines")
+```
+
+The boxplots for the scores of restaurants in Staten Island show that the most outliers are in American restaurants' scores. The scores for other restaurants of different cuisines do not have as many outliers as American restaurants'. Chinese restaurants in Staten Island, in general, do not have as many outliers as those in other boroughs. This and the fact that their scores are the lowest indicate that the quality of most of the Chinese restaurants in this borough is quite high.
+
+## t-tests on top 5 cuisines in Staten Island
+
+```{r, echo=FALSE, warning = FALSE}
+StatenIsland_American <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "STATEN ISLAND", Cuisine == "1") %>%
+  mutate(AverageScore = sum(SCORE)/3125)
+
+t.test(StatenIsland_American$SCORE,H0 = mu,conf.level=0.95)
+
+StatenIsland_Chinese <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "STATEN ISLAND", Cuisine == "2") %>%
+  mutate(AverageScore = sum(SCORE)/1174)
+
+t.test(StatenIsland_Chinese$SCORE,H0 = mu,conf.level=0.95)
+
+StatenIsland_Italian <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "STATEN ISLAND", Cuisine == "3") %>%
+  mutate(AverageScore = sum(SCORE)/1245)
+
+t.test(StatenIsland_Italian$SCORE,H0 = mu,conf.level=0.95)
+
+StatenIsland_Japanese <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "STATEN ISLAND", Cuisine == "4") %>%
+  mutate(AverageScore = sum(SCORE)/552)
+
+t.test(StatenIsland_Japanese$SCORE,H0 = mu,conf.level=0.95)
+
+StatenIsland_Mexican <- Cuisines %>%
+  dplyr::select(Cuisine, SCORE, BORO) %>%
+  filter(BORO == "STATEN ISLAND", Cuisine == "5") %>%
+  mutate(AverageScore = sum(SCORE)/549)
+
+t.test(StatenIsland_Mexican$SCORE,H0 = mu,conf.level=0.95)
+```
+
+The t-tests show that the null hypotheses of the relation between score and its mean value are no different are all rejected with the p-values lower than 2.2e-16 (which satisfies the benchmark of 0.05) and large t-values (ranging from approximately 37 to 85). The scores are significantly different from 0, which is right considering the hypothesis. The range of the 95 percent confidence interval for Chinese restaurants' scores are bigger compared to that of other cuisines' scores, which indicate there is a 5 percent chance of the scores straying far away from the mean. 
+
+# Cuisines by Boroughs
+
+```{r, message=FALSE, warning= FALSE}
+
+Boro_ggplot <- rbind(Manhattan_Cuisines, Bronx_Cuisines, Brooklyn_Cuisines, StatenIsland_Cuisines, Queens_Cuisines)
+
+Boro_ggplot$Percentage <- round(Boro_ggplot$Percentage, 3)
+
+ggplot(Boro_ggplot, aes( x = BORO, y = Percentage, fill = Cuisine)) +
+   geom_bar(position = position_stack(), stat = "identity", width = .7) +
+  scale_fill_manual(values = c(American = "brown 1", Chinese = "gold", Italian = "light green",
+                                Japanese = "sky blue", Mexican = "orange")) +
+  geom_text(aes(label = Percentage), position = position_stack(vjust = 0.5), size = 2.5) +
+   theme(plot.title = element_text(hjust = 0.5)) +
+  labs(title = "Percentages of each Cuisine in Different Boroughs", x = "Borough")
+```
+
+The bar plot shows the distribution of the top five cuisines in different boroughs in New York City. The majority of the cuisines in each borough is American. The second most popular cuisine in Bronx, Brooklyn, Queens, and Manhattan are Chinese, while in Staten Island it is Italian. Most Chinese restaurants are in Queens, American and Japanese restaurants in Manhattan, and Italian restaurants in Staten Island. 
+
+
+# Line plots for trends of scores
+
+The line graphs regarding all the different cuisines are of the time span of 2013-2017. However, Mayor Michael Bloomberg's tenure for initiating a letter grading system for restaurants were still fairly new in 2013. Therefore, a possible explanation on why the average score augments between the years of 2013-2014 could be the result of the grading system becoming finalized. This finalized grading system would include more violation codes being made and therefore more city regulations that the restaurants must comply to. This could explain why the average score in all boroughs initially shown in the year of 2013 were much lower than the other years of each cuisine. 
+
+```{r, message = FALSE, warning = FALSE}
+InspDate_Data <- Cuisines %>%
+  filter(!is.na(SCORE)) %>%
+  dplyr::select(BORO, Cuisine, InspectionDate, SCORE) %>%
+  group_by(BORO, Cuisine, InspectionDate, SCORE) %>%
+  filter(Cuisine == "1" | Cuisine == "2"|
+           Cuisine == "3" | Cuisine == "4" | Cuisine == "5") %>%
+  mutate(AverageScore = mean(SCORE, na.rm=TRUE), year=as.numeric(substr(InspectionDate,7,10)),
+         month = as.numeric(substr(InspectionDate,1,2)))
+
+American_line <- InspDate_Data %>%
+  dplyr::select(Cuisine, SCORE, year,  BORO) %>%
+  group_by(year,BORO)%>%
+  filter(Cuisine =="1") %>%
+  summarise(score=mean(SCORE))
+
+Chinese_line <- InspDate_Data %>%
+  dplyr::select(Cuisine, SCORE, year,  BORO) %>%
+  group_by(year,BORO)%>%
+  filter(Cuisine =="2") %>%
+  summarise(score=mean(SCORE))
+
+Italian_line <- InspDate_Data %>%
+  dplyr::select(Cuisine, SCORE, year,  BORO) %>%
+  group_by(year,BORO)%>%
+  filter(Cuisine =="3") %>%
+  summarise(score=mean(SCORE))
+
+Japanese_line <- InspDate_Data %>%
+  dplyr::select(Cuisine, SCORE, year,  BORO) %>%
+  group_by(year,BORO)%>%
+  filter(Cuisine =="4") %>%
+  summarise(score=mean(SCORE))
+
+Mexican_line <- InspDate_Data %>%
+  dplyr::select(Cuisine, SCORE, year,  BORO) %>%
+  group_by(year,BORO)%>%
+  filter(Cuisine =="5") %>%
+  summarise(score=mean(SCORE))
+```
+
+```{r, message = FALSE, warning = FALSE}
+ggplot(data = American_line) +
+  aes(x=year , y=score, color = BORO)+
+  geom_line() +
+  labs(x="Year", y = "Average Score", title = "Trends of Average Score for American Style Food in Different Boroughs",
+       colour = "Borough") 
+```
+
+Generally, the boroughs of of Brooklyn and Manhattan go through similar rises and falls in the average score over the years. A decrease of the average score is seen from the years of 2013-2016. However, the average score increases through the years of 2016-2017 in regards to Manhattan and Brooklyn. A possible explanation is the change of mayor positions. Bill de Blasio is the current Mayor and has been the mayor since the year of 2014. A possible explanation is that Bill de Blasio changed many policies and regulations regarding the workers compensation and benefits. These policies could have indirectly affected the inspection cycle and explain the increase of the average score in 2016-2017. The other boroughs, such as Queens, Staten Island, and the Bronx, had greater fluctuations. However, consistently Queens had a lower average score than the other boroughs and Staten Island consistently had a higher average score than the other boroughs. Possible factors that could explain this are income, resident population, and specific policies in each borough.
+
+```{r, message = FALSE, warning = FALSE}
+ggplot(data = Chinese_line) +
+  aes(x=year , y=score, color = BORO)+
+  geom_line() +
+  labs(x="Year", y = "Average Score", title = "Trends of Average Score for Chinese Style Food in Different Boroughs",
+       colour = "Borough")
+```
+
+Between the years of 2013-2014, we see an increase of the average score in all boroughs. Then it is consistent with similar scores between the years of 2014-2015. However, the Bronx had a lower average score than the other boroughs throughout all the years. This was a surprising result because the Bronx has a large composition of Chinese restaurants compared to the other boroughs. A possible explanation could be that inspections were not held regularly for Chinese restaurants in the Bronx. This could cause the data to be skewed or inaccurate. Manhattan had the highest average score throughout the years. This is most likely a result from outliers and the fact that Chinese restaurants are a smaller composition when compared to the other boroughs. All the boroughs seem to decrease in score around the year of 2016. This is most likely the result of strict Chinese restaurant policies that might have been implemented. 
+
+```{r, message = FALSE, warning = FALSE}
+ggplot(data = Italian_line) +
+  aes(x=year , y=score, color = BORO)+
+  geom_line() +
+  labs(x="Year", y = "Average Score", title = "Trends of Average Score for Italian Style Food in Different Boroughs",
+       colour = "Borough")
+```
+
+Rise of the average score increased significantly between the years the of 2015-2017 in the borough of Staten Island. This increase in the average score could be the result of Staten Island having the most Italian restaurants than the other boroughs. The composition of Italian restaurants, regarding the top five cuisines, is at approximately 19%. The other boroughs are composed of 13% or less. The more Italian restaurants there are the higher the chance of receiving violation codes, which increases the score of a restaurant. The Bronx's scores increased significantly between the years of 2014-2015. This is possibly occurring because of certain Italian restaurants receiving more violation codes than the general Italian restaurants. These outliers could be the cause the meaning of why there is a high average score in the year of 2015 in the Bronx as opposed to the other years. The other boroughs had similar average scores throughout the years.
+
+```{r, message = FALSE, warning = FALSE}
+ggplot(data = Japanese_line) +
+  aes(x=year , y=score, color = BORO)+
+  geom_line() +
+  labs(x="Year", y = "Average Score", title = "Trends of Average Score for Japanese Style Food in Different Boroughs", colour = "Borough")
+```
+
+Rise of the average score increase occurs for the all the boroughs. However, the Bronx always stayed consistently lower than the other boroughs. A possible explanation for this is that the Bronx is not composed of many Japanese restaurants. Out of the top five cuisines, the Bronx has only 2.1% of Japanese restaurants. Compared to the other cuisines, it is significantly lower. This could explain why the average score of Japanese cuisines in the Bronx have a low average score because there are not many Japanese restaurants there. Besides the Bronx being the only borough that was significantly different from the rest, Staten Island's average score of Japanese cuisines seems to increase largely during 2016-2017. This could be the result of new Japanese restaurants being built in Staten Island and therefore not being familiar with the violation codes and regulations of New York City. 
+
+
+```{r, message = FALSE, warning = FALSE}
+ggplot(data = Mexican_line) +
+  aes(x=year , y=score, color = BORO)+
+  geom_line() +
+  labs(x="Year", y = "Average Score", title = "Trends of Average Score for Mexican Style Food in Different Boroughs", colour = "Borough")
+```
+
+Generally the line graph regarding Mexican style food shows that the average score increased significantly from the years of 2013 and 2014. Possible causation for this augment in all Mexican style food restaurants could be possibly explained with the increase of restaurants. This increase of restaurants could be the result of naive restaurants and failing to comply with city and state regulations. As visually shown, the greatest increase occurs from 2013 to 2014 in all boroughs, that of which Staten Island receiving the highest score. Over the years, after 2014, the boroughs similarly receive the same average score without big noticeable fluctuations. 
+
+# Line graph of 10F changes in past four years
+
+```{r, message = FALSE, warning = FALSE}
+InspDate_10F_Data <- Cuisines %>%
+  dplyr::select(BORO, ViolationCode, InspectionDate) %>%
+  group_by(BORO, InspectionDate,ViolationCode ) %>%
+  filter(ViolationCode == "10F") %>%
+  mutate(year=as.numeric(substr(InspectionDate,7,10)))
+
+Year_10F_data <- InspDate_10F_Data %>%
+  dplyr::select(ViolationCode, year,BORO,InspectionDate) %>%
+  group_by(ViolationCode, year,BORO) %>%
+  summarise(count = sum(as.numeric(ViolationCode)))
+```
+
+```{r, message = FALSE, warning = FALSE}
+ggplot(data = Year_10F_data) +
+  aes(x=year , y=count, color = BORO)+
+  geom_line() +
+  labs(x="Year", y = "Count of Violation code 10F", title = "Trends of Violation code 10F for all Cuisine in Different Boroughs", colour = "Borough") 
+```
+
+The line graph shows a steady increase in violation code 10F from 2013 to 2015, where the number of this violation code in every brough began to decrease, especially that of Manhattan. We have yet to find out what is the reason behind this trend. This is also what needs to be noted in future analysis.
+
+
+# Conclusion
+
+In our analysis, we used many variables, including Score, Borough, Cuisine, InspectionDate, and ViolationCode. Score was used to conduct t-tests and demonstrate the trend over the years (the lower the score, the higher the quality of the restaurants). Variables such as Cuisine and ViolationCode were used to find out the distribution of cuisines and violation codes in each borough. The results from the t-tests may suggest the correlation between the locations and the cuisines, and the graphs and tables may demonstrate the difference in the average score of each cuisine. Our tentative findings include the most popular cuisine in New York City (American) and the borough with the best score (Bronx). Through the statistical tests, linear regressions, and multiple plots, we have also found out that the average scores of either boroughs or cuisines cannot be trusted completely. The reason is that there are many outliers in the scores, which largely affect the true mean. This means that, though the score is one of the clearest indicators of the quality of the restaurants, they should not be used to represent the overall quality. In addition, they are not to be used to measure the ratings of a restaurant regarding how enjoyable or appetizing its food is, either. This is a common misunderstanding that the public usually has when it comes to grades or scores.
+
+Thus, the limitation to this analysis is the accuracy. Several assumptions can be made, but the conclusion is yet to be reached. 
+
+To sum up, the analysis has provided a detailed insight of the New York City Restaurants Inspection dataset. A lot of information has been obtained through the analysing process. Most of them are useful; nevertheless, more research and analysis are needed to reach a complete conclusion. One direction for future analyses is to investigate further into the outliers of the scores column in the dataset. Another direction is to conduct more research on New York City Restaurants Inspection policies in order to have a deeper understanding of the scoring system and the trends of violation codes across the years. 
+
+# Sources
+
+Bloomberg, Michael R., and Thomas Farley. 'Restaurant Grading in New York City at 18 Months.' NYC Health, www1.nyc.gov/assets/doh/downloads/pdf/rii/restaurant-grading-18-month-report.pdf
+
+
+Dai, Serena. 'Yes, the Number of Chain Restaurants Is Growing in NYC.' Eater NY, Eater NY, 6 Nov. 2017, ny.eater.com/2017/11/6/16612300/chain-restaurant-growth-nyc-report.
+
+
+'The Inspection Process'. NYC Health, www1.nyc.gov/site/doh/business/food-operators/the-inspection-process.page
+
+# Acknowledgments
+
+NYC OpenData
+
+Geocodio
